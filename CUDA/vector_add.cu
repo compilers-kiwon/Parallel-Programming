@@ -53,6 +53,7 @@ int main(void)
     cudaMemcpy(cuda_mem[SRC2],cpu_mem[SRC2],sizeof(int)*MAX_SIZE,cudaMemcpyHostToDevice);
 
     vector_add<<<NUM_OF_BLOCKS,NUM_OF_THREADS_PER_BLOCK>>>(cuda_mem[DST],cuda_mem[SRC1],cuda_mem[SRC2]);
+    cudaDeviceSynchronize();
     cudaMemcpy(cpu_mem[DST],cuda_mem[DST],sizeof(int)*MAX_SIZE,cudaMemcpyDeviceToHost);
 /*
     for(i=0;i<MAX_SIZE;i++)
