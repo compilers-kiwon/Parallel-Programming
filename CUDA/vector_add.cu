@@ -4,9 +4,8 @@
 
 #define MAX_SIZE    4000000
 
-#define NUM_OF_BLOCKS               200
-#define NUM_OF_THREADS_PER_BLOCK    20000
-#define VECTOR_SIZE_PER_THREAD      (MAX_SIZE/(NUM_OF_BLOCKS*NUM_OF_THREADS_PER_BLOCK))
+#define NUM_OF_BLOCKS               5
+#define NUM_OF_THREADS_PER_BLOCK    (MAX_SIZE/NUM_OF_BLOCKS)
 
 #define DST     0
 #define SRC1    1
@@ -17,13 +16,8 @@
 
 __global__ void vector_add(int *dst,int *src1,int* src2)
 {
-    int begin = (blockDim.x*blockIdx.x+threadIdx.x)*VECTOR_SIZE_PER_THREAD;
-    int end = min(begin+VECTOR_SIZE_PER_THREAD,MAX_SIZE);
-
-    for(;begin<end;begin++)
-    {
-        dst[begin] = src1[begin]+src2[begin];
-    }
+    int thread_id = blockDim.x*blockIdx.x+threadIdx.x;
+    dst[thread_id] = src1[thread_id]+src2[thread_id];
 }
 
 int main(void)
