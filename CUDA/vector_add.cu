@@ -1,59 +1,100 @@
-#include    <stdio.h>
-#include    <stdlib.h>
-#include    <time.h>
+#include <stdio.h>
+#include <cuda.h>
+#include <stdlib.h>
+#include <time.h>
 
-#define MAX_SIZE    4000000
-
-#define NUM_OF_BLOCKS               5
-#define NUM_OF_THREADS_PER_BLOCK    (MAX_SIZE/NUM_OF_BLOCKS)
-
-#define DST     0
-#define SRC1    1
-#define SRC2    2
-#define MAX_MEM 3
-
-#define min(a,b)    ((a)<(b)?(a):(b))
-
-__global__ void vector_add(int *dst,int *src1,int* src2)
-{
-    int thread_id = blockDim.x*blockIdx.x+threadIdx.x;
-    dst[thread_id] = src1[thread_id]+src2[thread_id];
+__global__ void add(int *a,int *b, int *c, int size) {
+	int tid = blockIdx.x *  blockDim.x + threadIdx.x;
+        if(tid < size){
+          c[tid] = a[tid]+b[tid];
+        }
 }
 
-int main(void)
-{
-    int i;
-    int *cpu_mem[MAX_MEM],*cuda_mem[MAX_MEM];
+int main(int argc, char *argv[])  {
+	int N = 10, T = 10, B = 1;            // threads per block and blocks per grid
+	int *a, *b, *c, *d;
+	int *dev_a, *dev_b, *dev_c;
 
-    clock_t start = clock();
+	do {
+        printf("\nEnter size of vector, (currently %d): ",N);
+        scanf("%d",&N);
+        printf("\nLimitation: there is only 1 grid.\n");
+		printf("\nEnter number of threads per block: ");
+		scanf("%d",&T);
+		printf("\nEnter number of blocks per grid: ");
+		scanf("%d",&B);
+		if (T * B != N) printf("Error T x B != N, try again\n");
+	} while (T * B != N);
 
-    for(i=0;i<MAX_MEM;i++)
-    {
-        cpu_mem[i] = (int*)malloc(sizeof(int)*MAX_SIZE);
-        cudaMalloc((void**)&cuda_mem[i],sizeof(int)*MAX_SIZE);
+	cudaEvent_t start, stop;     // using cuda events to measure time
+	float elapsed_time_ms;       // which is applicable for asynchronous code also
+
+    a = (int*) malloc(N*sizeof(int));		//this time use dynamically allocated memory for arrays on host
+    b = (int*) malloc(N*sizeof(int));
+    c = (int*) malloc(N*sizeof(int));
+    d = (int*) malloc(N*sizeof(int));
+
+    for(int i=0;i<N;i++) {    // load arrays with some numbers
+		a[i] = i;
+		b[i] = i;
+	}
+
+    cudaEventCreate( &start ); 
+	cudaEventCreate( &stop );
+
+    /* ------------- COMPUTATION ON DEVICE GPU ----------------------------*/
+	cudaEventRecord( start, 0 ); // instrument code to measure start time
+
+	cudaMalloc((void**)&dev_a,N * sizeof(int));
+	cudaMalloc((void**)&dev_b,N * sizeof(int));
+	cudaMalloc((void**)&dev_c,N * sizeof(int));
+
+	cudaMemcpy(dev_a, a , N*sizeof(int),cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_b, b , N*sizeof(int),cudaMemcpyHostToDevice);
+	cudaMemcpy(dev_c, c , N*sizeof(int),cudaMemcpyHostToDevice);
+    
+	add<<<B,T>>>(dev_a,dev_b,dev_c,N);
+
+	cudaMemcpy(c,dev_c,N*sizeof(int),cudaMemcpyDeviceToHost);
+
+	cudaEventRecord( stop, 0 );     // instrument code to measure end time
+	cudaEventSynchronize( stop );
+	cudaEventElapsedTime( &elapsed_time_ms, start, stop );
+
+	printf("Time to calculate results on GPU: %f ms.\n", elapsed_time_ms);  // print out execution time
+
+    /* ------------- COMPUTATION ON HOST CPU ----------------------------*/
+    cudaEventRecord(start, 0);		// use same timing
+
+    for(int i=0;i<N;i++) {
+        d[i] = a[i]+b[i];
+    }
+    
+    cudaEventRecord(stop, 0);     	// instrument code to measure end time
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed_time_ms, start, stop );
+
+    printf("Time to calculate results on CPU: %f ms.\n", elapsed_time_ms);  // print out execution time
+
+    /* ------------------- check device creates correct results -----------------*/
+    for(int i=0;i<N;i++) {
+        if (c[i] != d[i]) 
+            printf("*********** ERROR in results, CPU and GPU create different answers ********\n");
+        break;
     }
 
-    srand(time(NULL));
+	// clean up
+    free(a);
+    free(b);
+    free(c);
+    free(d);
 
-    for(i=0;i<MAX_SIZE;i++)
-    {
-        cpu_mem[SRC1][i] = rand();
-        cpu_mem[SRC2][i] = rand();
-    }
+	cudaFree(dev_a);
+	cudaFree(dev_b);
+	cudaFree(dev_c);
 
-    cudaMemcpy(cuda_mem[SRC1],cpu_mem[SRC1],sizeof(int)*MAX_SIZE,cudaMemcpyHostToDevice);
-    cudaMemcpy(cuda_mem[SRC2],cpu_mem[SRC2],sizeof(int)*MAX_SIZE,cudaMemcpyHostToDevice);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
 
-    vector_add<<<NUM_OF_BLOCKS,NUM_OF_THREADS_PER_BLOCK>>>(cuda_mem[DST],cuda_mem[SRC1],cuda_mem[SRC2]);
-    cudaDeviceSynchronize();
-    cudaMemcpy(cpu_mem[DST],cuda_mem[DST],sizeof(int)*MAX_SIZE,cudaMemcpyDeviceToHost);
-
-    for(i=0;i<MAX_MEM;i++)
-    {
-        free(cpu_mem[i]);
-        cudaFree(cuda_mem[i]);
-    }
-
-    printf("time : %d ms\n",((int)clock() - start) / (CLOCKS_PER_SEC / 1000));
-    return  0;
+	return 0;
 }
