@@ -97,8 +97,12 @@ int main(int argc, char *argv[])  {
             b[i * N + j] = i;
 	    }
 
-        /* ------------- COMPUTATION DONE ON GPU ----------------------------*/
+        cudaEventCreate(&start);     		
+        cudaEventCreate(&stop);
 
+        /* ------------- COMPUTATION DONE ON GPU ----------------------------*/
+        cudaEventRecord(start, 0);  // instrument code to measure start time
+        
         cudaMalloc((void**)&dev_a, size);		// allocate memory on device
         cudaMalloc((void**)&dev_b, size);
         cudaMalloc((void**)&dev_c, size);
@@ -107,10 +111,6 @@ int main(int argc, char *argv[])  {
         cudaMemcpy(dev_b, b , size ,cudaMemcpyHostToDevice);
         cudaMemcpy(dev_c, c , size ,cudaMemcpyHostToDevice);
 
-        cudaEventCreate(&start);     		// instrument code to measure start time
-        cudaEventCreate(&stop);
-
-        cudaEventRecord(start, 0);
         // cudaEventSynchronize(start);  	// Needed?
 
         gpu_matrixadd<<<Grid,Block>>>(dev_a,dev_b,dev_c,N);
