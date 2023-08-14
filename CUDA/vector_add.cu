@@ -1,100 +1,149 @@
+#include <cuda_runtime.h>
 #include <stdio.h>
-#include <cuda.h>
 #include <stdlib.h>
-#include <time.h>
+#include <winsock.h>
 
-__global__ void add(int *a,int *b, int *c, int size) {
-	int tid = blockIdx.x *  blockDim.x + threadIdx.x;
-        if(tid < size){
-          c[tid] = a[tid]+b[tid];
-        }
+inline void CHECK(const cudaError_t error)
+{
+    if(error != cudaSuccess)
+    {
+        fprintf(stderr, "Error: %s:%d, ", __FILE__, __LINE__);
+        fprintf(stderr, "code: %d, reason: %s\n", error, cudaGetErrorString(error));
+        exit(1);
+    }
 }
 
-int main(int argc, char *argv[])  {
-	int N = 10, T = 10, B = 1;            // threads per block and blocks per grid
-	int *a, *b, *c, *d;
-	int *dev_a, *dev_b, *dev_c;
+int gettimeofday (struct timeval *tv, void* tz)
+{
+	union {
+		long long int ns100; /*time since 1 Jan 1601 in 100ns units */
+		FILETIME ft;
+	} now;
 
-	do {
-        printf("\nEnter size of vector, (currently %d): ",N);
-        scanf("%d",&N);
-        printf("\nLimitation: there is only 1 grid.\n");
-		printf("\nEnter number of threads per block: ");
-		scanf("%d",&T);
-		printf("\nEnter number of blocks per grid: ");
-		scanf("%d",&B);
-		if (T * B != N) printf("Error T x B != N, try again\n");
-	} while (T * B != N);
+	GetSystemTimeAsFileTime (&now.ft);
+	tv->tv_usec = (long long int) ((now.ns100 / 10LL) % 1000000LL);
+	tv->tv_sec = (long long int) ((now.ns100 - 116444736000000000LL) / 10000000LL);
+	
+	return (0);
+}
 
-	cudaEvent_t start, stop;     // using cuda events to measure time
-	float elapsed_time_ms;       // which is applicable for asynchronous code also
+double cpuTimer()
+{
+    struct timeval tp;
+    gettimeofday(&tp, NULL);
+    return ((double)tp.tv_sec + (double)tp.tv_usec*1.e-6);
+}
 
-    a = (int*) malloc(N*sizeof(int));		//this time use dynamically allocated memory for arrays on host
-    b = (int*) malloc(N*sizeof(int));
-    c = (int*) malloc(N*sizeof(int));
-    d = (int*) malloc(N*sizeof(int));
+void initialData(float *arr, int size)
+{
+    time_t t;
+    srand((unsigned)time(&t));  // seed
+    for(int i=0;i<size;i++)
+                arr[i]=(float)(rand())/RAND_MAX;
+}
 
-    for(int i=0;i<N;i++) {    // load arrays with some numbers
-		a[i] = i;
-		b[i] = i;
-	}
+void AddVecOnHost(float *A, float *B, float *C, const int size)
+{
+#pragma omp parallel for
+    for(int i=0;i<size;i++)
+        C[i] = A[i] + B[i];
+}
 
-    cudaEventCreate( &start ); 
-	cudaEventCreate( &stop );
+__global__ void AddVecOnGPU(float *A, float *B, float *C, const int size)
+{
+    int idx = blockIdx.x*blockDim.x + threadIdx.x;
+    if(idx<size) C[idx] = A[idx] + B[idx];
+}
 
-    /* ------------- COMPUTATION ON DEVICE GPU ----------------------------*/
-	cudaEventRecord( start, 0 ); // instrument code to measure start time
-
-	cudaMalloc((void**)&dev_a,N * sizeof(int));
-	cudaMalloc((void**)&dev_b,N * sizeof(int));
-	cudaMalloc((void**)&dev_c,N * sizeof(int));
-
-	cudaMemcpy(dev_a, a , N*sizeof(int),cudaMemcpyHostToDevice);
-	cudaMemcpy(dev_b, b , N*sizeof(int),cudaMemcpyHostToDevice);
-	cudaMemcpy(dev_c, c , N*sizeof(int),cudaMemcpyHostToDevice);
-    
-	add<<<B,T>>>(dev_a,dev_b,dev_c,N);
-
-	cudaMemcpy(c,dev_c,N*sizeof(int),cudaMemcpyDeviceToHost);
-
-	cudaEventRecord( stop, 0 );     // instrument code to measure end time
-	cudaEventSynchronize( stop );
-	cudaEventElapsedTime( &elapsed_time_ms, start, stop );
-
-	printf("Time to calculate results on GPU: %f ms.\n", elapsed_time_ms);  // print out execution time
-
-    /* ------------- COMPUTATION ON HOST CPU ----------------------------*/
-    cudaEventRecord(start, 0);		// use same timing
-
-    for(int i=0;i<N;i++) {
-        d[i] = a[i]+b[i];
+void checkResult(float *host, float *gpu, const int N)
+{
+    double epsilon = 1.0e-8;
+    bool match = 1;
+    for(int i=0;i<N;i++)
+    {
+        if(abs(host[i] - gpu[i]) > epsilon)
+        {
+            match = 0;
+            printf("Vector do not match!\n");
+            printf("host %5.2f, gpu %5.2f at current %d\n", host[i], gpu[i], i);
+            break;
+        }
     }
+
+    if(match) printf("Vectors match.\n");
+}
+
+int main(int argc, char **argv)
+{
+    int nSize = 1<<24;   //16M
+    printf("Vector size : %d\n", nSize);
+
+/*********** on HOST *******************/
+    // malloc host memory
+    size_t nBytes = nSize*sizeof(float);
+
+    float *h_A, *h_B, *hostResult, *gpuResult;
+    h_A = (float*)malloc(nBytes);
+    h_B = (float*)malloc(nBytes);
+    hostResult = (float*)malloc(nBytes);
+    gpuResult = (float*)malloc(nBytes);
+
+    double iStart, iEnd;
+    double ElapsedTime;
+
+    initialData(h_A, nSize);
+    initialData(h_B, nSize);
+
+    memset(hostResult, 0, nBytes);
+    memset(gpuResult, 0, nBytes);
+
+    iStart=cpuTimer();
+    AddVecOnHost(h_A, h_B, hostResult, nSize);
+    iEnd = cpuTimer();
+    ElapsedTime = iEnd - iStart;
+    printf("Elapsed Time in AddVecOnHost : %f\n",ElapsedTime);
+/*****************************************/
+
+/********** ON GPU **********************/
+    // malloc device global memory
+    float *d_A, *d_B, *d_C;
+    CHECK(cudaMalloc((float**)&d_A, nBytes));
+    CHECK(cudaMalloc((float**)&d_B, nBytes));
+    CHECK(cudaMalloc((float**)&d_C, nBytes));
+
+    // Data transfer : Host --> Device
+    CHECK(cudaMemcpy(d_A, h_A, nBytes, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(d_B, h_B, nBytes, cudaMemcpyHostToDevice));
+
+    // dimension of thread block and grid
+    dim3 block(256);
+    dim3 grid((nSize+block.x-1)/block.x);
+
+    // create tow events
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    iStart = cpuTimer();
+
+    float Etime;
     
-    cudaEventRecord(stop, 0);     	// instrument code to measure end time
+	cudaEventRecord(start);
+    AddVecOnGPU<<<grid, block>>>(d_A, d_B, d_C, nSize);
+    CHECK(cudaDeviceSynchronize());
+    cudaEventRecord(stop);
+    //ElapsedTime = cpuTimer() - iStart;
     cudaEventSynchronize(stop);
-    cudaEventElapsedTime(&elapsed_time_ms, start, stop );
+    cudaEventElapsedTime(&Etime, start, stop);
+    printf("Elapsed Time in AddVecOnGPU<<<%d, %d>>> : %f ms\n", grid.x, block.x, Etime);
+    CHECK(cudaMemcpy(gpuResult, d_C, nBytes, cudaMemcpyDeviceToHost));
+/****************************************/
 
-    printf("Time to calculate results on CPU: %f ms.\n", elapsed_time_ms);  // print out execution time
+    // check results
+    checkResult(hostResult, gpuResult, nSize);
 
-    /* ------------------- check device creates correct results -----------------*/
-    for(int i=0;i<N;i++) {
-        if (c[i] != d[i]) 
-            printf("*********** ERROR in results, CPU and GPU create different answers ********\n");
-        break;
-    }
-
-	// clean up
-    free(a);
-    free(b);
-    free(c);
-    free(d);
-
-	cudaFree(dev_a);
-	cudaFree(dev_b);
-	cudaFree(dev_c);
-
-	cudaEventDestroy(start);
-	cudaEventDestroy(stop);
-
-	return 0;
+    // memory deallocate
+    free(h_A),      free(h_B),      free(hostResult),       free(gpuResult);
+    CHECK(cudaFree(d_A)),   CHECK(cudaFree(d_B)),   CHECK(cudaFree(d_C));
+    return 0;
 }
