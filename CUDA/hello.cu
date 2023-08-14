@@ -1,16 +1,26 @@
 #include <stdio.h>
 
-__global__ void helloFromGPU(void)
-{
-    int tid=threadIdx.x;
+__global__ void helloFromHost();
+__device__ int helloFromDevice(int tid);
 
-    printf("[Thread: %d] Hello World From GPU!\n",tid);
-}
-
-int main(void)
+int main()
 {
-    printf("Hello World from CPU!\n");
-    helloFromGPU<<<1,10>>>();
+    helloFromHost<<<1,10>>>();
     cudaDeviceReset();
     return 0;
+}
+
+__global__ void helloFromHost()
+{
+    int tid = threadIdx.x;
+    printf("Hello world From __global__ kernel: %d\n", tid);
+    
+    int tid1 = helloFromDevice(tid);
+    printf("tid1 : %d\n", tid1);
+}
+
+__device__ int helloFromDevice(int tid)
+{
+    printf("Hello world Form __device__ kernel: %d\n",tid);
+    return tid+1;
 }
